@@ -275,10 +275,12 @@
               # The cargo-tauri.hook standard install handles the Linux .deb, but
               # macOS produces a .app bundle. Extract it and expose a bin/handy
               # symlink so `nix run` / mainProgram resolves.
+              # With buildAndTestSubdir = "src-tauri", cargo-tauri.hook builds
+              # with the target dir at the source root (not under src-tauri/),
+              # so the .app bundle lands at ./target/.../bundle/macos.
               installPhase = ''
                 runHook preInstall
                 mkdir -p $out/Applications $out/bin
-                cd src-tauri
                 cp -r target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/bundle/macos/Handy.app $out/Applications/
                 ln -s $out/Applications/Handy.app/Contents/MacOS/Handy $out/bin/handy
                 runHook postInstall
