@@ -10,6 +10,12 @@ const SILERO_FRAME_MS: u32 = 30;
 const SILERO_FRAME_SAMPLES: usize =
     (constants::WHISPER_SAMPLE_RATE * SILERO_FRAME_MS / 1000) as usize;
 
+/// Default Silero speech-probability threshold for normal-volume speech.
+pub const DEFAULT_VAD_THRESHOLD: f32 = 0.3;
+/// Lower threshold for quiet/whispered speech (whisper mode). Whispers score
+/// low Silero probability, so 0.3 gates them out entirely.
+pub const WHISPER_VAD_THRESHOLD: f32 = 0.18;
+
 pub struct SileroVad {
     engine: Vad,
     threshold: f32,

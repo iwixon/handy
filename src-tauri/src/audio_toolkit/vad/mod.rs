@@ -28,5 +28,14 @@ pub trait VoiceActivityDetector: Send + Sync {
 mod silero;
 mod smoothed;
 
-pub use silero::SileroVad;
-pub use smoothed::SmoothedVad;
+/// Convert a decibel value to a linear amplitude multiplier (e.g. +12 dB ≈ 3.98).
+#[inline]
+pub fn db_to_linear(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
+
+pub use silero::{SileroVad, DEFAULT_VAD_THRESHOLD, WHISPER_VAD_THRESHOLD};
+pub use smoothed::{
+    SmoothedVad, DEFAULT_VAD_HANGOVER_FRAMES, DEFAULT_VAD_ONSET_FRAMES, DEFAULT_VAD_PREFILL_FRAMES,
+    WHISPER_VAD_HANGOVER_FRAMES, WHISPER_VAD_ONSET_FRAMES, WHISPER_VAD_PREFILL_FRAMES,
+};

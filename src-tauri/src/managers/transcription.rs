@@ -28,6 +28,19 @@ use transcribe_rs::{
     SpeechModel, TranscribeOptions,
 };
 
+/// Scale the whole buffer so its loudest sample reaches `target_peak` (linear,
+/// 0..1). No-op for silence or already-louder buffers — only ever amplifies.
+fn normalize_peak(samples: &mut [f32], target_peak: f32) {
+    let peak = samples.iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
+    if peak <= 1e-6 || peak >= target_peak {
+        return;
+    }
+    let gain = target_peak / peak;
+    for s in samples.iter_mut() {
+        *s = (*s * gain).clamp(-1.0, 1.0);
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelStateEvent {
     pub event_type: String,
@@ -508,6 +521,13 @@ impl TranscriptionManager {
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
 
+        // Normalize audio peak for whisper mode (helps with quiet audio)
+        const WHISPER_TARGET_PEAK: f32 = 0.841; // -1.5 dBFS
+        let mut audio = audio;
+        if settings.whisper_mode {
+            normalize_peak(&mut audio, WHISPER_TARGET_PEAK);
+        }
+
         // Validate selected language against the model's supported languages.
         // If the language isn't supported, fall back to "auto" to prevent errors.
         // Validate against the model that's actually loaded (which can differ
@@ -580,6 +600,19 @@ impl TranscriptionManager {
                                 Some(normalized)
                             };
 
+                            // Whisper-mode decode tuning. Only applied when whisper_mode
+                            // is on; otherwise the no-op sentinels (-1 / 2.4) leave
+                            // whisper.cpp's own defaults untouched so the default
+                            // transcription path is byte-for-byte unchanged.
+                            // n_max_text_ctx = 0 disables cross-window context carryover
+                            // (whisper.cpp -mc 0), killing the end-of-file repetition
+                            // loop on long / quiet audio.
+                            let (n_max_text_ctx, entropy_thold) = if settings.whisper_mode {
+                                (settings.whisper_max_text_ctx, settings.whisper_entropy_thold)
+                            } else {
+                                (-1, 2.4)
+                            };
+
                             let params = WhisperInferenceParams {
                                 language: whisper_language,
                                 translate: settings.translate_to_english,
@@ -588,6 +621,8 @@ impl TranscriptionManager {
                                 } else {
                                     Some(settings.custom_words.join(", "))
                                 },
+                                n_max_text_ctx,
+                                entropy_thold,
                                 ..Default::default()
                             };
 

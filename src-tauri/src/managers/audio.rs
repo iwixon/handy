@@ -1,4 +1,12 @@
-use crate::audio_toolkit::{list_input_devices, vad::SmoothedVad, AudioRecorder, SileroVad};
+use crate::audio_toolkit::{
+    list_input_devices,
+    vad::{
+        db_to_linear, SmoothedVad, DEFAULT_VAD_HANGOVER_FRAMES, DEFAULT_VAD_ONSET_FRAMES,
+        DEFAULT_VAD_PREFILL_FRAMES, DEFAULT_VAD_THRESHOLD, WHISPER_VAD_HANGOVER_FRAMES,
+        WHISPER_VAD_ONSET_FRAMES, WHISPER_VAD_PREFILL_FRAMES, WHISPER_VAD_THRESHOLD,
+    },
+    AudioRecorder, SileroVad,
+};
 use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
@@ -121,9 +129,25 @@ fn create_audio_recorder(
     vad_path: &str,
     app_handle: &tauri::AppHandle,
 ) -> Result<AudioRecorder, anyhow::Error> {
-    let silero = SileroVad::new(vad_path, 0.3)
+    let settings = get_settings(app_handle);
+    let (threshold, prefill, hangover, onset) = if settings.whisper_mode {
+        (WHISPER_VAD_THRESHOLD, WHISPER_VAD_PREFILL_FRAMES, WHISPER_VAD_HANGOVER_FRAMES, WHISPER_VAD_ONSET_FRAMES)
+    } else {
+        (DEFAULT_VAD_THRESHOLD, DEFAULT_VAD_PREFILL_FRAMES, DEFAULT_VAD_HANGOVER_FRAMES, DEFAULT_VAD_ONSET_FRAMES)
+    };
+
+    let silero = SileroVad::new(vad_path, threshold)
         .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {}", e))?;
-    let smoothed_vad = SmoothedVad::new(Box::new(silero), 15, 15, 2);
+
+    // In whisper mode, boost the signal the VAD *scores* by +12 dB so quiet
+    // whispered speech crosses Silero's threshold. This gain is applied only to
+    // the VAD's detection copy — the recorded audio handed to Whisper keeps its
+    // original level (Whisper loudness is handled separately by peak
+    // normalization in the transcription manager), so we never clip the signal
+    // the model actually sees.
+    let detection_gain = if settings.whisper_mode { db_to_linear(12.0) } else { 1.0 };
+    let smoothed_vad =
+        SmoothedVad::with_detection_gain(Box::new(silero), prefill, hangover, onset, detection_gain);
 
     // Recorder with VAD plus a spectrum-level callback that forwards updates to
     // the frontend.

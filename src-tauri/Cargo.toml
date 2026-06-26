@@ -88,7 +88,7 @@ tauri-plugin-single-instance = "2.3.2"
 tauri-plugin-updater = "2.10.0"
 
 [target.'cfg(windows)'.dependencies]
-transcribe-rs = { version = "0.3.3", features = ["whisper-vulkan", "ort-directml"] }
+transcribe-rs = { version = "0.3.8", features = ["whisper-vulkan", "ort-directml"] }
 windows = { version = "0.61.3", features = [
   "Win32_Media_Audio_Endpoints",
   "Win32_System_Com_StructuredStorage",
@@ -100,17 +100,22 @@ winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
-transcribe-rs = { version = "0.3.3", features = ["whisper-metal"] }
+transcribe-rs = { version = "0.3.8", features = ["whisper-metal"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 gtk = "0.18"
-transcribe-rs = { version = "0.3.3", features = ["whisper-vulkan"] }
+transcribe-rs = { version = "0.3.8", features = ["whisper-vulkan"] }
 
 [patch.crates-io]
 tauri-runtime = { git = "https://github.com/cjpais/tauri.git", branch = "handy-2.10.2" }
 tauri-runtime-wry = { git = "https://github.com/cjpais/tauri.git", branch = "handy-2.10.2" }
 tauri-utils = { git = "https://github.com/cjpais/tauri.git", branch = "handy-2.10.2" }
+# Fork adds n_max_text_ctx / entropy_thold to WhisperInferenceParams so we can
+# disable cross-window context carryover (-mc 0) and tune the temperature
+# fallback — fixes the end-of-file repetition loop on long / quiet audio.
+# Patches all platform requirements (base 0.3.8 + the 0.3.3 target pins).
+transcribe-rs = { git = "https://github.com/iwixon/transcribe-rs", rev = "bf555a694b02693b6f97eaaeb689cd39400471a1" }
 
 [dev-dependencies]
 tempfile = "3"

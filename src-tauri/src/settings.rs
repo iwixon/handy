@@ -430,6 +430,12 @@ pub struct AppSettings {
     pub whisper_gpu_device: i32,
     #[serde(default)]
     pub extra_recording_buffer_ms: u64,
+    #[serde(default)]
+    pub whisper_mode: bool,
+    #[serde(default = "default_whisper_max_text_ctx")]
+    pub whisper_max_text_ctx: i32,
+    #[serde(default = "default_whisper_entropy_thold")]
+    pub whisper_entropy_thold: f32,
 }
 
 fn default_model() -> String {
@@ -650,6 +656,15 @@ fn default_whisper_gpu_device() -> i32 {
     -1 // auto
 }
 
+fn default_whisper_max_text_ctx() -> i32 {
+    0 // disable cross-window context carryover by default — fixes the
+      // end-of-file repetition loop on long / quiet audio
+}
+
+fn default_whisper_entropy_thold() -> f32 {
+    2.8 // above whisper.cpp's 2.4 default; eager temperature fallback
+}
+
 fn default_typing_tool() -> TypingTool {
     TypingTool::Auto
 }
@@ -814,6 +829,9 @@ pub fn get_default_settings() -> AppSettings {
         ort_accelerator: OrtAcceleratorSetting::default(),
         whisper_gpu_device: default_whisper_gpu_device(),
         extra_recording_buffer_ms: 0,
+        whisper_mode: false,
+        whisper_max_text_ctx: default_whisper_max_text_ctx(),
+        whisper_entropy_thold: default_whisper_entropy_thold(),
     }
 }
 
