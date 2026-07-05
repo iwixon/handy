@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
+use crate::pipeline::{normalize_peak, parse_whisper_flags, split_shell_args, WHISPER_TARGET_PEAK};
 use crate::settings::{
     get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
 };
@@ -28,17 +29,78 @@ use transcribe_rs::{
     SpeechModel, TranscribeOptions,
 };
 
-/// Scale the whole buffer so its loudest sample reaches `target_peak` (linear,
-/// 0..1). No-op for silence or already-louder buffers — only ever amplifies.
-fn normalize_peak(samples: &mut [f32], target_peak: f32) {
-    let peak = samples.iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
-    if peak <= 1e-6 || peak >= target_peak {
-        return;
+/// Run the user's ffmpeg preprocessing string over `audio` and return the
+/// processed samples. We own the input/output paths and the final
+/// `-ar 16000 -ac 1` so the result is always Whisper-shaped; the user supplies
+/// only the middle (e.g. `-af loudnorm=...`). Returns `None` on any failure
+/// (missing binary, ffmpeg error, bad WAV) so the caller falls back to the raw
+/// buffer — preprocessing must never break transcription.
+fn run_ffmpeg_preprocess(
+    app_handle: &AppHandle,
+    audio: &[f32],
+    user_args: &str,
+) -> Option<Vec<f32>> {
+    use crate::audio_toolkit::{read_wav_samples, save_wav_file};
+
+    // Locate ffmpeg: bundled resource first (installed .app), then PATH (dev shell).
+    let ffmpeg = app_handle
+        .path()
+        .resolve("ffmpeg", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ffmpeg".to_string());
+
+    // Temp in/out WAVs under the system temp dir, tagged with a pid+counter so
+    // concurrent/successive runs don't collide (Date/random are unavailable).
+    static FFMPEG_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = FFMPEG_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir();
+    let in_path = tmp.join(format!("handy-pp-in-{}-{seq}.wav", std::process::id()));
+    let out_path = tmp.join(format!("handy-pp-out-{}-{seq}.wav", std::process::id()));
+
+    // Best-effort cleanup guard for both temp files.
+    let cleanup = |a: &std::path::Path, b: &std::path::Path| {
+        let _ = std::fs::remove_file(a);
+        let _ = std::fs::remove_file(b);
+    };
+
+    if let Err(e) = save_wav_file(&in_path, audio) {
+        warn!("ffmpeg preprocess: failed to write temp input WAV: {e}");
+        cleanup(&in_path, &out_path);
+        return None;
     }
-    let gain = target_peak / peak;
-    for s in samples.iter_mut() {
-        *s = (*s * gain).clamp(-1.0, 1.0);
+
+    let mut cmd = std::process::Command::new(&ffmpeg);
+    cmd.arg("-y").arg("-i").arg(&in_path);
+    cmd.args(split_shell_args(user_args));
+    // Force Whisper-shaped output regardless of what the user typed.
+    cmd.args(["-ar", "16000", "-ac", "1"]);
+    cmd.arg(&out_path);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("ffmpeg preprocess: failed to spawn '{ffmpeg}': {e}");
+            cleanup(&in_path, &out_path);
+            return None;
+        }
+    };
+    if !output.status.success() {
+        warn!(
+            "ffmpeg preprocess: ffmpeg exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        cleanup(&in_path, &out_path);
+        return None;
     }
+
+    let result = read_wav_samples(&out_path)
+        .map_err(|e| warn!("ffmpeg preprocess: failed to read ffmpeg output WAV: {e}"))
+        .ok();
+    cleanup(&in_path, &out_path);
+    result
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -521,10 +583,26 @@ impl TranscriptionManager {
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
 
-        // Normalize audio peak for whisper mode (helps with quiet audio)
-        const WHISPER_TARGET_PEAK: f32 = 0.841; // -1.5 dBFS
+        // ── Configurable pipeline: preprocess stage ──────────────────────
+        // All gated behind `pipeline_enabled`; when off this is a no-op and the
+        // audio buffer is byte-for-byte what upstream would transcribe.
         let mut audio = audio;
-        if settings.whisper_mode {
+        if settings.pipeline_enabled {
+            // 1. ffmpeg preprocessing (only if the user supplied a string).
+            //    Any failure falls back to the un-processed buffer.
+            if !settings.pipeline_ffmpeg_args.trim().is_empty() {
+                if let Some(processed) =
+                    run_ffmpeg_preprocess(&self.app_handle, &audio, &settings.pipeline_ffmpeg_args)
+                {
+                    debug!(
+                        "Pipeline ffmpeg preprocess: {} -> {} samples",
+                        audio.len(),
+                        processed.len()
+                    );
+                    audio = processed;
+                }
+            }
+            // 2. In-process loudness floor — only ever raises quiet buffers.
             normalize_peak(&mut audio, WHISPER_TARGET_PEAK);
         }
 
@@ -600,20 +678,7 @@ impl TranscriptionManager {
                                 Some(normalized)
                             };
 
-                            // Whisper-mode decode tuning. Only applied when whisper_mode
-                            // is on; otherwise the no-op sentinels (-1 / 2.4) leave
-                            // whisper.cpp's own defaults untouched so the default
-                            // transcription path is byte-for-byte unchanged.
-                            // n_max_text_ctx = 0 disables cross-window context carryover
-                            // (whisper.cpp -mc 0), killing the end-of-file repetition
-                            // loop on long / quiet audio.
-                            let (n_max_text_ctx, entropy_thold) = if settings.whisper_mode {
-                                (settings.whisper_max_text_ctx, settings.whisper_entropy_thold)
-                            } else {
-                                (-1, 2.4)
-                            };
-
-                            let params = WhisperInferenceParams {
+                            let mut params = WhisperInferenceParams {
                                 language: whisper_language,
                                 translate: settings.translate_to_english,
                                 initial_prompt: if settings.custom_words.is_empty() {
@@ -621,10 +686,18 @@ impl TranscriptionManager {
                                 } else {
                                     Some(settings.custom_words.join(", "))
                                 },
-                                n_max_text_ctx,
-                                entropy_thold,
                                 ..Default::default()
                             };
+
+                            // Configurable decode tuning. Only applied when the
+                            // pipeline is enabled; otherwise params keep the
+                            // fork's no-op defaults (n_max_text_ctx = -1,
+                            // entropy_thold = 2.4 → whisper.cpp's own defaults)
+                            // so the default transcription path is byte-for-byte
+                            // unchanged. An empty flag string is itself a no-op.
+                            if settings.pipeline_enabled {
+                                parse_whisper_flags(&settings.pipeline_whisper_flags, &mut params);
+                            }
 
                             whisper_engine
                                 .transcribe_with(&audio, &params)

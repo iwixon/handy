@@ -23,6 +23,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # name = "cli"
 # path = "src/audio_toolkit/bin/cli.rs"
 
+# Pipeline tuning harness: replays a recording through the real capture +
+# transcription path for a grid of configs and ranks by WER. Dev-only tool,
+# run via `nix develop -c cargo run --bin tune -- <rec.wav> <script.txt>`.
+[[bin]]
+name = "tune"
+path = "src/audio_toolkit/bin/tune.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 serde_json = "1"

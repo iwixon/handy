@@ -436,6 +436,24 @@ pub struct AppSettings {
     pub whisper_max_text_ctx: i32,
     #[serde(default = "default_whisper_entropy_thold")]
     pub whisper_entropy_thold: f32,
+    // ── Configurable whisper pipeline (opt-in, experimental) ──────────────
+    // One master gate. When false, the entire pipeline is inert and the app
+    // behaves byte-for-byte like upstream. When true, three free-text config
+    // strings drive the three stages (capture/VAD, ffmpeg preprocess, whisper
+    // decode). Empty string for any stage = that stage uses its defaults.
+    #[serde(default)]
+    pub pipeline_enabled: bool,
+    // Whether the VAD/capture gate runs at all (only honored when
+    // pipeline_enabled). Default true = gate on, matching upstream; set false to
+    // record ungated audio (avoids dropping quiet/whispered frames).
+    #[serde(default = "default_pipeline_vad_enabled")]
+    pub pipeline_vad_enabled: bool,
+    #[serde(default = "default_pipeline_string")]
+    pub pipeline_vad_config: String,
+    #[serde(default = "default_pipeline_string")]
+    pub pipeline_ffmpeg_args: String,
+    #[serde(default = "default_pipeline_string")]
+    pub pipeline_whisper_flags: String,
 }
 
 fn default_model() -> String {
@@ -665,6 +683,16 @@ fn default_whisper_entropy_thold() -> f32 {
     2.8 // above whisper.cpp's 2.4 default; eager temperature fallback
 }
 
+fn default_pipeline_string() -> String {
+    // Empty = the corresponding pipeline stage uses its built-in defaults.
+    // Stays inert until the user types a config, so first-enable changes nothing.
+    String::new()
+}
+
+fn default_pipeline_vad_enabled() -> bool {
+    true // gate on by default, matching upstream capture behavior
+}
+
 fn default_typing_tool() -> TypingTool {
     TypingTool::Auto
 }
@@ -832,6 +860,11 @@ pub fn get_default_settings() -> AppSettings {
         whisper_mode: false,
         whisper_max_text_ctx: default_whisper_max_text_ctx(),
         whisper_entropy_thold: default_whisper_entropy_thold(),
+        pipeline_enabled: false,
+        pipeline_vad_enabled: default_pipeline_vad_enabled(),
+        pipeline_vad_config: default_pipeline_string(),
+        pipeline_ffmpeg_args: default_pipeline_string(),
+        pipeline_whisper_flags: default_pipeline_string(),
     }
 }
 

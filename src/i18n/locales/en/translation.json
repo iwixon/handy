@@ -251,6 +251,28 @@
         "label": "Experimental Features",
         "description": "Enable experimental features that are still in development."
       },
+      "pipeline": {
+        "toggle": {
+          "label": "Configurable Whisper Pipeline",
+          "description": "Opt-in pipeline for tuning capture and transcription of quiet/whispered speech via free-text config. When off, transcription behaves exactly as default. Changes apply on the next recording."
+        },
+        "vadEnabled": {
+          "label": "Voice Activity Detection (VAD)",
+          "description": "Gate that drops non-speech frames during capture. Turn OFF to record ungated audio — useful for very quiet whispering that the gate clips, at the cost of also capturing silence/noise."
+        },
+        "vad": {
+          "title": "VAD / capture config",
+          "description": "Voice-activity tuning, space- or comma-separated key=value. Keys: threshold (0-1), gain (dB, detection-only), prefill, hangover, onset (frame counts, 30ms each). Empty = defaults."
+        },
+        "ffmpeg": {
+          "title": "ffmpeg preprocessing args",
+          "description": "Middle of 'ffmpeg -i IN <args> -ar 16000 -ac 1 OUT'. Use an -af filtergraph (loudnorm, highpass, afftdn, etc.). Empty = no preprocessing. Failures fall back to raw audio."
+        },
+        "whisper": {
+          "title": "Whisper decode flags",
+          "description": "whisper.cpp-style flags. Supported: -mc N / --max-context N, --entropy-thold F. Empty = whisper.cpp defaults."
+        }
+      },
       "lazyStreamClose": {
         "label": "Keep Mic Open Between Transcriptions",
         "description": "Keeps the microphone stream open for 30 seconds after recording stops, reducing latency for back-to-back transcriptions. May degrade Bluetooth audio quality while active."

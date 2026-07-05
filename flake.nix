@@ -254,6 +254,11 @@
               postFixup = lib.optionalString isDarwin ''
                 install_name_tool -add_rpath "${pkgs.onnxruntime}/lib" \
                   $out/Applications/Handy.app/Contents/MacOS/Handy
+                # The `tune` pipeline-tuning harness is bundled alongside the app
+                # binary and links onnxruntime too (via the shared lib); give it
+                # the same rpath so it runs directly from the build output.
+                install_name_tool -add_rpath "${pkgs.onnxruntime}/lib" \
+                  $out/Applications/Handy.app/Contents/MacOS/tune
               '';
 
               preFixup = lib.optionalString isLinux ''
@@ -283,6 +288,11 @@
                 mkdir -p $out/Applications $out/bin
                 cp -r target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/bundle/macos/Handy.app $out/Applications/
                 ln -s $out/Applications/Handy.app/Contents/MacOS/Handy $out/bin/handy
+                # Bundle ffmpeg for the configurable preprocessing pipeline. The
+                # app resolves it via BaseDirectory::Resource ("ffmpeg") — the
+                # same mechanism used for the silero VAD model. The store-path
+                # reference keeps ffmpeg (and its lib closure) as a runtime dep.
+                cp ${pkgs.ffmpeg}/bin/ffmpeg $out/Applications/Handy.app/Contents/Resources/ffmpeg
                 runHook postInstall
               '';
             }
@@ -335,6 +345,10 @@
                 pkg-config
                 rustPlatform.bindgenHook
                 cmake
+                # Runtime tool for the configurable preprocessing pipeline; in a
+                # packaged build it's bundled into Handy.app/Contents/Resources,
+                # but `tauri dev` resolves it from PATH.
+                ffmpeg
               ]);
 
               inherit (commonEnv pkgs)

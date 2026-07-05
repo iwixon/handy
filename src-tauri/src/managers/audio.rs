@@ -1,10 +1,6 @@
 use crate::audio_toolkit::{
     list_input_devices,
-    vad::{
-        db_to_linear, SmoothedVad, DEFAULT_VAD_HANGOVER_FRAMES, DEFAULT_VAD_ONSET_FRAMES,
-        DEFAULT_VAD_PREFILL_FRAMES, DEFAULT_VAD_THRESHOLD, WHISPER_VAD_HANGOVER_FRAMES,
-        WHISPER_VAD_ONSET_FRAMES, WHISPER_VAD_PREFILL_FRAMES, WHISPER_VAD_THRESHOLD,
-    },
+    vad::{parse_vad_config, SmoothedVad, VadConfig},
     AudioRecorder, SileroVad,
 };
 use crate::helpers::clamshell;
@@ -130,36 +126,59 @@ fn create_audio_recorder(
     app_handle: &tauri::AppHandle,
 ) -> Result<AudioRecorder, anyhow::Error> {
     let settings = get_settings(app_handle);
-    let (threshold, prefill, hangover, onset) = if settings.whisper_mode {
-        (WHISPER_VAD_THRESHOLD, WHISPER_VAD_PREFILL_FRAMES, WHISPER_VAD_HANGOVER_FRAMES, WHISPER_VAD_ONSET_FRAMES)
+
+    // The configurable pipeline can disable the VAD stage entirely. This is
+    // opt-in twice over: only honored when the master `pipeline_enabled` gate is
+    // on, AND `pipeline_vad_enabled` is explicitly false. With VAD off the
+    // recorder keeps every captured frame (recorder records raw when no VAD is
+    // attached), which avoids the gate dropping quiet/whispered frames — at the
+    // cost of recording silence/noise too. `pipeline_vad_enabled` defaults true,
+    // so enabling the pipeline does not disable the gate on its own.
+    let vad_disabled = settings.pipeline_enabled && !settings.pipeline_vad_enabled;
+
+    let mut builder = AudioRecorder::new()
+        .map_err(|e| anyhow::anyhow!("Failed to create AudioRecorder: {}", e))?;
+
+    if !vad_disabled {
+        // When the pipeline is enabled, resolve the VAD/DSP tuning from the
+        // user's free-text config string; otherwise use the upstream defaults
+        // (VadConfig::default()) so capture behavior is byte-for-byte unchanged.
+        // An empty config string also resolves to the defaults, so merely
+        // enabling the pipeline does not alter capture until the user tunes it.
+        let vad_cfg = if settings.pipeline_enabled {
+            parse_vad_config(&settings.pipeline_vad_config)
+        } else {
+            VadConfig::default()
+        };
+
+        let silero = SileroVad::new(vad_path, vad_cfg.threshold)
+            .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {}", e))?;
+
+        // Detection gain boosts the signal the VAD *scores* (e.g. so quiet
+        // whispered speech crosses Silero's threshold) but is applied only to
+        // the VAD's detection copy — the recorded audio handed to Whisper keeps
+        // its original level (Whisper loudness is handled separately by peak
+        // normalization in the transcription manager), so we never clip the
+        // signal the model actually sees. 0 dB (the default) = unity gain.
+        let smoothed_vad = SmoothedVad::with_detection_gain(
+            Box::new(silero),
+            vad_cfg.prefill,
+            vad_cfg.hangover,
+            vad_cfg.onset,
+            vad_cfg.detection_gain(),
+        );
+        builder = builder.with_vad(Box::new(smoothed_vad));
     } else {
-        (DEFAULT_VAD_THRESHOLD, DEFAULT_VAD_PREFILL_FRAMES, DEFAULT_VAD_HANGOVER_FRAMES, DEFAULT_VAD_ONSET_FRAMES)
-    };
+        info!("Pipeline: VAD stage disabled — recording ungated audio");
+    }
 
-    let silero = SileroVad::new(vad_path, threshold)
-        .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {}", e))?;
-
-    // In whisper mode, boost the signal the VAD *scores* by +12 dB so quiet
-    // whispered speech crosses Silero's threshold. This gain is applied only to
-    // the VAD's detection copy — the recorded audio handed to Whisper keeps its
-    // original level (Whisper loudness is handled separately by peak
-    // normalization in the transcription manager), so we never clip the signal
-    // the model actually sees.
-    let detection_gain = if settings.whisper_mode { db_to_linear(12.0) } else { 1.0 };
-    let smoothed_vad =
-        SmoothedVad::with_detection_gain(Box::new(silero), prefill, hangover, onset, detection_gain);
-
-    // Recorder with VAD plus a spectrum-level callback that forwards updates to
-    // the frontend.
-    let recorder = AudioRecorder::new()
-        .map_err(|e| anyhow::anyhow!("Failed to create AudioRecorder: {}", e))?
-        .with_vad(Box::new(smoothed_vad))
-        .with_level_callback({
-            let app_handle = app_handle.clone();
-            move |levels| {
-                utils::emit_levels(&app_handle, &levels);
-            }
-        });
+    // Spectrum-level callback that forwards updates to the frontend.
+    let recorder = builder.with_level_callback({
+        let app_handle = app_handle.clone();
+        move |levels| {
+            utils::emit_levels(&app_handle, &levels);
+        }
+    });
 
     Ok(recorder)
 }
@@ -443,6 +462,28 @@ impl AudioRecordingManager {
         if *self.is_open.lock().unwrap() {
             self.close_generation.fetch_add(1, Ordering::SeqCst);
             self.stop_microphone_stream();
+            self.start_microphone_stream()?;
+        }
+        Ok(())
+    }
+
+    /// Drop the cached recorder so the next recording rebuilds it from current
+    /// settings. Call this after a pipeline VAD-config change so the new VAD/DSP
+    /// tuning applies live without an app restart. If a stream is currently
+    /// open, restart it (mirrors `update_selected_device`) so the change takes
+    /// effect immediately rather than on the next on-demand open.
+    pub fn invalidate_recorder(&self) -> Result<(), anyhow::Error> {
+        // Always cancel any pending lazy-close so its timer can't fire on the
+        // recorder we're about to rebuild (mirrors update_mode's bump).
+        self.close_generation.fetch_add(1, Ordering::SeqCst);
+        let was_open = *self.is_open.lock().unwrap();
+        if was_open {
+            self.stop_microphone_stream();
+        }
+        // Discard the cached recorder; preload_vad/start_microphone_stream will
+        // recreate it via create_audio_recorder using the latest settings.
+        *self.recorder.lock().unwrap() = None;
+        if was_open {
             self.start_microphone_stream()?;
         }
         Ok(())

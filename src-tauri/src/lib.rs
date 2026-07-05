@@ -11,6 +11,7 @@ mod input;
 mod llm_client;
 mod managers;
 mod overlay;
+pub mod pipeline;
 pub mod portable;
 mod settings;
 mod shortcut;
@@ -582,6 +583,11 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::set_clamshell_microphone,
             commands::audio::get_clamshell_microphone,
             commands::audio::is_recording,
+            commands::audio::change_pipeline_enabled_setting,
+            commands::audio::change_pipeline_vad_enabled_setting,
+            commands::audio::change_pipeline_vad_config_setting,
+            commands::audio::change_pipeline_ffmpeg_args_setting,
+            commands::audio::change_pipeline_whisper_flags_setting,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,

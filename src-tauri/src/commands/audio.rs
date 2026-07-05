@@ -310,3 +310,73 @@ pub fn is_recording(app: AppHandle) -> bool {
     let audio_manager = app.state::<Arc<AudioRecordingManager>>();
     audio_manager.is_recording()
 }
+
+/* ── Configurable pipeline (opt-in, experimental) ────────────────────────── */
+
+/// Master gate for the configurable whisper pipeline. When false, the app
+/// behaves byte-for-byte like upstream. Toggling it changes how the VAD is
+/// built, so invalidate the cached recorder for the change to apply live.
+#[tauri::command]
+#[specta::specta]
+pub fn change_pipeline_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.pipeline_enabled = enabled;
+    write_settings(&app, settings);
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    rm.invalidate_recorder()
+        .map_err(|e| format!("Failed to refresh recorder: {}", e))?;
+    Ok(())
+}
+
+/// Whether the VAD/capture gate runs at all. Disabling it records ungated audio
+/// (no frames dropped). Changes how the recorder is built, so rebuild it live.
+#[tauri::command]
+#[specta::specta]
+pub fn change_pipeline_vad_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.pipeline_vad_enabled = enabled;
+    write_settings(&app, settings);
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    rm.invalidate_recorder()
+        .map_err(|e| format!("Failed to refresh recorder: {}", e))?;
+    Ok(())
+}
+
+/// VAD/DSP config string (e.g. `threshold=0.18 gain=12 hangover=25 onset=1`).
+/// The VAD is cached in the recorder, so rebuild it for the change to apply live.
+#[tauri::command]
+#[specta::specta]
+pub fn change_pipeline_vad_config_setting(app: AppHandle, config: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.pipeline_vad_config = config;
+    write_settings(&app, settings);
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    rm.invalidate_recorder()
+        .map_err(|e| format!("Failed to refresh recorder: {}", e))?;
+    Ok(())
+}
+
+/// ffmpeg preprocessing args (the middle of `ffmpeg -i IN <args> -ar 16000 -ac 1 OUT`).
+/// Read fresh on every transcription, so this applies live with no restart.
+#[tauri::command]
+#[specta::specta]
+pub fn change_pipeline_ffmpeg_args_setting(app: AppHandle, args: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.pipeline_ffmpeg_args = args;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+/// whisper.cpp-style decode flags (e.g. `-mc 0 --entropy-thold 2.8`).
+/// Read fresh on every transcription, so this applies live with no restart.
+#[tauri::command]
+#[specta::specta]
+pub fn change_pipeline_whisper_flags_setting(app: AppHandle, flags: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.pipeline_whisper_flags = flags;
+    write_settings(&app, settings);
+    Ok(())
+}

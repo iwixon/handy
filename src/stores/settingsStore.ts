@@ -155,6 +155,16 @@ const settingUpdaters: {
     commands.changeWhisperGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  pipeline_enabled: (value) =>
+    commands.changePipelineEnabledSetting(value as boolean),
+  pipeline_vad_enabled: (value) =>
+    commands.changePipelineVadEnabledSetting(value as boolean),
+  pipeline_vad_config: (value) =>
+    commands.changePipelineVadConfigSetting(value as string),
+  pipeline_ffmpeg_args: (value) =>
+    commands.changePipelineFfmpegArgsSetting(value as string),
+  pipeline_whisper_flags: (value) =>
+    commands.changePipelineWhisperFlagsSetting(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(
