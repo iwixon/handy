@@ -245,8 +245,7 @@
                 OPENSSL_NO_VENDOR = "1";
               } // lib.optionalAttrs isDarwin {
                 MACOSX_DEPLOYMENT_TARGET = "14.0";
-                # Link the clang compiler runtime — whisper-rs compiles Objective-C
-                # with @available() checks that emit ___isPlatformVersionAtLeast calls
+                # Link the compiler runtime for Apple's platform-availability checks.
                 NIX_LDFLAGS = "-L${pkgs.llvmPackages.compiler-rt-libc}/lib -lclang_rt.osx";
               };
 
@@ -273,7 +272,6 @@
               installPhase = ''
                 runHook preInstall
                 mkdir -p $out/Applications $out/bin
-                cd src-tauri
                 cp -r target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/bundle/macos/Handy.app $out/Applications/
                 ln -s $out/Applications/Handy.app/Contents/MacOS/Handy $out/bin/handy
                 runHook postInstall

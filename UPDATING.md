@@ -5,17 +5,14 @@
 ```bash
 cd ~/git/handy
 git pull
-nix build .#handy
-cp -r result/Applications/Handy.app /Applications/
+nix build .#handy --out-link /tmp/handy-test
 ```
+
+This keeps the new bundle separate from an installed Handy build. The bundle is at `/tmp/handy-test/Applications/Handy.app`.
 
 ## Notes
 
 - If `nix build` fails after an update, try `nix flake update` first — upstream dependency changes may require newer nixpkgs.
-- The VAD model (`src-tauri/resources/models/silero_vad_v4.onnx`) is bundled into the app at build time. If the upstream project changes it, re-download:
-  ```bash
-  curl -o src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.computer/silero_vad_v4.onnx
-  ```
 - If JS dependencies change (new entries in `bun.lock`), regenerate the Nix lockfile:
   ```bash
   bunx bun2nix -o .nix/bun.nix
