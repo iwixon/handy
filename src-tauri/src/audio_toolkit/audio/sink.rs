@@ -3,7 +3,7 @@ use std::sync::{mpsc, Arc};
 use handy_recorder::{AudioChunk, Sink};
 
 use crate::audio_toolkit::{
-    audio::AudioVisualiser,
+    audio::{AudioVisualiser, QuietSpeechNormalizer},
     constants,
     vad::{VadFrame, VoiceActivityDetector},
 };
@@ -11,7 +11,7 @@ use crate::audio_toolkit::{
 /// How 16 kHz mono frames should be filtered for one recording session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VadPolicy {
-    /// Bypass VAD and forward every frame.
+    /// Bypass VAD, retain the original recording, and level model input.
     Disabled,
     /// Current offline-tuned VAD profile.
     Offline,
@@ -63,13 +63,13 @@ impl CaptureVad {
 
 /// Receives spectrum levels for the recording overlay.
 pub type LevelCallback = Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>;
-/// Receives each 16 kHz mono frame that passes the recording's VAD policy, in
-/// order. Used to feed live streaming transcription as audio arrives.
+/// Receives model-input frames in order. With VAD disabled, the callback gets
+/// normalized frames while the saved recording retains the original samples.
 pub type AudioFrameCallback = Arc<dyn Fn(&[f32]) + Send + Sync + 'static>;
 
 /// What a finished recording hands back.
 pub struct CapturedAudio {
-    /// 16 kHz mono samples that passed the VAD policy.
+    /// VAD-filtered samples, or original samples when VAD is disabled.
     pub samples: Vec<f32>,
     /// Every sample received (pre-VAD) was exactly zero, e.g. a muted mic.
     /// False when no audio arrived at all.
@@ -87,6 +87,7 @@ pub struct CaptureSink {
     visualizer: AudioVisualiser,
     on_levels: LevelCallback,
     on_audio: AudioFrameCallback,
+    model_input_normalizer: Option<QuietSpeechNormalizer>,
     /// Signalled on the first chunk: the device is delivering audio. Silence
     /// counts; readiness is not speech.
     ready: Option<mpsc::Sender<()>>,
@@ -108,6 +109,8 @@ impl CaptureSink {
         on_audio: AudioFrameCallback,
         ready: mpsc::Sender<()>,
     ) -> Self {
+        let model_input_normalizer = (policy == VadPolicy::Disabled)
+            .then(|| QuietSpeechNormalizer::new(vad.frame_samples()));
         if policy != VadPolicy::Disabled {
             let hangover = vad.hangover_for(policy);
             vad.detector.set_hangover_frames(hangover);
@@ -125,6 +128,7 @@ impl CaptureSink {
             ),
             on_levels,
             on_audio,
+            model_input_normalizer,
             ready: Some(ready),
             samples: Vec::new(),
             heard_sound: false,
@@ -163,9 +167,13 @@ impl CaptureSink {
         }
     }
 
-    fn emit(samples: &mut Vec<f32>, on_audio: &AudioFrameCallback, frame: &[f32]) {
-        samples.extend_from_slice(frame);
-        on_audio(frame);
+    fn emit(&mut self, frame: &[f32]) {
+        self.samples.extend_from_slice(frame);
+        if let Some(normalizer) = &mut self.model_input_normalizer {
+            (self.on_audio)(normalizer.normalize(frame));
+        } else {
+            (self.on_audio)(frame);
+        }
     }
 }
 
@@ -185,7 +193,7 @@ impl Sink for CaptureSink {
         }
 
         if self.policy == VadPolicy::Disabled {
-            Self::emit(&mut self.samples, &self.on_audio, real);
+            self.emit(real);
             return;
         }
 
@@ -197,7 +205,10 @@ impl Sink for CaptureSink {
             .push_frame(chunk.samples)
             .unwrap_or(VadFrame::Speech(chunk.samples))
         {
-            VadFrame::Speech(frame) => Self::emit(&mut self.samples, &self.on_audio, frame),
+            VadFrame::Speech(frame) => {
+                self.samples.extend_from_slice(frame);
+                (self.on_audio)(frame);
+            }
             VadFrame::Noise => {}
         }
     }

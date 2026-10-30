@@ -1,6 +1,6 @@
 use crate::audio_toolkit::chunking;
 use crate::audio_toolkit::{
-    apply_custom_words, detect_output_language, normalize_transcription_output,
+    apply_custom_words, detect_output_language, normalize_peak, normalize_transcription_output,
     remove_filler_words, OutputLanguageEvidence,
 };
 use crate::chinese_script::{convert_chinese_script, ChineseVariety};
@@ -1007,7 +1007,13 @@ impl TranscriptionManager {
 
     /// Decode a whole clip with the loaded model, loading it first if a load
     /// is under way.
-    fn decode_batch(&self, audio: Vec<f32>) -> Result<RunOutcome> {
+    fn decode_batch(&self, mut audio: Vec<f32>) -> Result<RunOutcome> {
+        // Disabling capture VAD is the opt-in quiet-input path. Keep the
+        // recording itself untouched; only normalize the model's batch input.
+        if !get_settings(&self.app_handle).vad_enabled {
+            normalize_peak(&mut audio);
+        }
+
         // A cancel from here on (during the model-load wait or chunk planning
         // included) stops every run of this transcription.
         let mark = self.engine.cancel_mark();

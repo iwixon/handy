@@ -26,15 +26,21 @@ impl VoiceActivityDetector for ScriptedVad {
     }
 
     fn set_hangover_frames(&mut self, frames: usize) {
-        *self.hangover.lock().unwrap() = Some(frames);
+        *locked(&self.hangover) = Some(frames);
     }
 
     fn reset(&mut self) {
-        *self.resets.lock().unwrap() += 1;
+        *locked(&self.resets) += 1;
     }
 }
 
 const FRAME: usize = 4;
+
+fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 struct Harness {
     sink: CaptureSink,
@@ -54,7 +60,7 @@ fn harness(policy: VadPolicy) -> Harness {
     let fed = Arc::new(Mutex::new(Vec::new()));
     let on_audio: AudioFrameCallback = {
         let fed = Arc::clone(&fed);
-        Arc::new(move |frame: &[f32]| fed.lock().unwrap().extend_from_slice(frame))
+        Arc::new(move |frame: &[f32]| locked(&fed).extend_from_slice(frame))
     };
     let on_levels: LevelCallback = Arc::new(|_| {});
     let (ready_tx, ready) = mpsc::channel();
@@ -111,13 +117,30 @@ fn disabled_vad_keeps_every_real_sample_and_drops_padding() {
     h.sink.process_chunk(chunk(&[3.0, 0.0, 0.0, 0.0], 1));
 
     let expected = vec![1.0, 0.0, 2.0, 0.0, 3.0];
-    assert_eq!(*h.fed.lock().unwrap(), expected);
-    assert_eq!(h.sink.finish().samples, expected);
-    assert_eq!(
-        *h.resets.lock().unwrap(),
-        0,
-        "a disabled policy leaves VAD alone"
+    let captured = h.sink.finish();
+    let model_audio = locked(&h.fed);
+    assert_eq!(captured.samples, expected);
+    assert_eq!(model_audio.len(), expected.len());
+    assert!(model_audio.iter().all(|sample| sample.abs() <= 0.98));
+    assert_eq!(*locked(&h.resets), 0, "a disabled policy leaves VAD alone");
+}
+
+#[test]
+fn disabled_vad_normalizes_quiet_model_input_but_keeps_original_recording() {
+    let mut h = harness(VadPolicy::Disabled);
+    let quiet = [0.01; FRAME];
+    h.sink.process_chunk(chunk(&quiet, FRAME));
+
+    let captured = h.sink.finish();
+    let model_audio = locked(&h.fed);
+    let model_rms =
+        (model_audio.iter().map(|x| x * x).sum::<f32>() / model_audio.len() as f32).sqrt();
+
+    assert!(
+        model_rms >= 0.07,
+        "quiet model input was not normalized: {model_rms}"
     );
+    assert_eq!(captured.samples, quiet);
 }
 
 #[test]
@@ -154,19 +177,19 @@ fn vad_keeps_speech_frames_only() {
     h.sink.process_chunk(chunk(&[2.0; FRAME], FRAME));
 
     let expected = [[1.0; FRAME], [2.0; FRAME]].concat();
-    assert_eq!(*h.fed.lock().unwrap(), expected);
+    assert_eq!(*locked(&h.fed), expected);
     assert_eq!(h.sink.finish().samples, expected);
 }
 
 #[test]
 fn each_recording_resets_the_detector_with_its_policys_hangover() {
     let offline = harness(VadPolicy::Offline);
-    assert_eq!(*offline.hangover.lock().unwrap(), Some(10));
-    assert_eq!(*offline.resets.lock().unwrap(), 1);
+    assert_eq!(*locked(&offline.hangover), Some(10));
+    assert_eq!(*locked(&offline.resets), 1);
 
     let streaming = harness(VadPolicy::Streaming);
-    assert_eq!(*streaming.hangover.lock().unwrap(), Some(20));
-    assert_eq!(*streaming.resets.lock().unwrap(), 1);
+    assert_eq!(*locked(&streaming.hangover), Some(20));
+    assert_eq!(*locked(&streaming.resets), 1);
 }
 
 #[test]

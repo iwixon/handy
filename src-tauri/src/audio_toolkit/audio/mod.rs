@@ -1,12 +1,14 @@
 // Re-export all audio components
 mod decode;
 mod device;
+mod normalizer;
 mod sink;
 mod utils;
 mod visualizer;
 
 pub use decode::decode_audio_file;
 pub use device::{list_output_devices, output_device_name, OutputDeviceInfo};
+pub use normalizer::{normalize_peak, QuietSpeechNormalizer};
 pub use sink::{
     AudioFrameCallback, CaptureSink, CaptureVad, CapturedAudio, LevelCallback, VadPolicy,
 };

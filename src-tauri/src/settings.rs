@@ -540,6 +540,8 @@ pub struct AppSettings {
     pub transcribe_gpu_device: Option<String>,
     #[serde(default)]
     pub extra_recording_buffer_ms: u64,
+    /// When false, bypasses capture VAD and normalizes model input while keeping
+    /// the saved microphone samples unchanged.
     #[serde(default = "default_vad_enabled")]
     pub vad_enabled: bool,
     /// Experimental detector implementation. Silero remains the stable default.

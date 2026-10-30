@@ -496,6 +496,8 @@ impl ShortcutAction for TranscribeAction {
             .as_ref()
             .map(|m| m.supports_streaming)
             .unwrap_or(false);
+        // Disabling VAD opts into retaining quiet capture frames. The capture
+        // sink levels the model-input copy while keeping recorded samples raw.
         let vad_policy = if !settings.vad_enabled {
             VadPolicy::Disabled
         } else if model_supports_streaming {

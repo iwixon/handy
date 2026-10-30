@@ -131,6 +131,14 @@ Resources only need re-copying if they change upstream (new icons, sounds, model
 
 ## Troubleshooting
 
+### Whispering is missing from a recording
+
+In **Settings > Advanced**, turn off **Voice Activity Detection** to bypass
+capture-time speech filtering. Handy then levels low-volume audio sent to batch
+or streaming models; saved microphone samples remain unchanged. This can also
+raise room noise. Long Audio Chunking may still use VAD to choose pause
+boundaries, but it keeps all audio samples in the resulting chunks.
+
 ### macOS Accessibility remains enabled after a local rebuild
 
 Local builds use the ad-hoc `signingIdentity: "-"`. A rebuild can have a new macOS code
